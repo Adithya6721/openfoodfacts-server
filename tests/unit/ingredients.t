@@ -971,6 +971,33 @@ puffed orange and caramelized unknown_fruit4.",
 		}
 	],
 
+	# Shared-head coordination (issue #14853):
+	# in "sheep's and goat's milk" the head noun "milk" is attached only to the
+	# recognized side, so it must be reconstructed on the unknown side.
+	[
+		"en-sheeps-and-goats-milk",
+		{
+			lc => "en",
+			ingredients_text => "sheep's and goat's milk",
+		}
+	],
+	# Same, with a processing word that must stay attached to the first ingredient.
+	[
+		"en-pasteurised-sheeps-and-goats-milk",
+		{
+			lc => "en",
+			ingredients_text => "Pasteurised sheep's and goat's milk",
+		}
+	],
+	# Both heads explicit: must keep splitting into 2 ingredients (no regression).
+	[
+		"en-sheeps-milk-and-goats-milk",
+		{
+			lc => "en",
+			ingredients_text => "sheep's milk and goat's milk",
+		}
+	],
+
 	# Do not consider A at the end of the string to be a stopword
 	# https://github.com/openfoodfacts/openfoodfacts-server/pull/11095
 	[

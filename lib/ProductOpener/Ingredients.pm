@@ -1414,6 +1414,50 @@ sub parse_processing_from_ingredient ($ingredients_lc, $ingredient) {
 	return (\@processings, $ingredient, $ingredient_id, $ingredient_recognized);
 }
 
+=head2 try_completing_shared_head_ingredient($ingredients_lc, $unknown_side, $known_side)
+
+    my $completed_ref = try_completing_shared_head_ingredient($ingredients_lc, "sheep's", "goat's milk");
+
+=cut
+
+# Shared-head (a.k.a. right-node raising) coordination: in "sheep's and goat's milk" the head noun "milk"
+# is attached only to the second conjunct but semantically belongs to both, so the first conjunct is
+# truncated ("sheep's"). We recover it by appending a short suffix taken from the end of the recognized
+# conjunct and by keeping the candidate only when the taxonomy recognizes it, so we never invent an ingredient.
+sub try_completing_shared_head_ingredient ($ingredients_lc, $unknown_side, $known_side) {
+
+	return undef if (!defined($unknown_side)) or (!defined($known_side));
+	return undef if ($unknown_side eq '') or ($known_side eq '');
+
+	# "known_side" is the ingredient as recognized by parse_processing_from_ingredient(),
+	# which already removed the leading processing words (e.g. "Pasteurised goat's milk" -> "goat's milk"),
+	# so the trailing word(s) of it are the shared head noun.
+	my @known_words = split /\s+/, $known_side;
+
+	# A shared head is a single noun, so try the last word first, then the last 2 words, then 3.
+	foreach my $word_count (1, 2, 3) {
+
+		last if $word_count > scalar @known_words;
+
+		my $shared_head = join ' ', @known_words[$#known_words - $word_count + 1 .. $#known_words];
+
+		# The ingredient we are completing keeps its own processing words, so the candidate goes
+		# through the same recognition + processing removal as any other ingredient.
+		my $candidate = $unknown_side . ' ' . $shared_head;
+		my (undef, undef, $ingredient_id, $is_recognized)
+			= parse_processing_from_ingredient($ingredients_lc, $candidate);
+
+		if ($is_recognized) {
+			return {
+				text => $candidate,
+				id => $ingredient_id,
+			};
+		}
+	}
+
+	return undef;
+}
+
 =head2 parse_origins_from_text ( product_ref, $text, $ingredients_lc)
 
 This function parses the origins of ingredients field to extract the origins of specific ingredients.
@@ -3113,16 +3157,70 @@ Text to analyze
 
 							my $ingredients_recognized = 0;
 
-							foreach ($ingredient1, $ingredient2) {
+							# Keep track, for each side, of whether it is a known ingredient
+							# (once the processing words are removed) and of its cleaned up form.
+							my @is_recognized_side = (0, 0);
+							my @cleaned_side = ('', '');
+
+							foreach my $side (0, 1) {
+
+								my $candidate = ($side == 0) ? $ingredient1 : $ingredient2;
+
 								# Remove percent
-								$_ =~ s/${\compiled_regexp('\s' . $percent_or_quantity_regexp . '$')}//;
+								$candidate =~ s/${\compiled_regexp('\s' . $percent_or_quantity_regexp . '$')}//;
 
 								# Check if we recognize the ingredient
-								(undef, undef, undef, my $is_recognized)
-									= parse_processing_from_ingredient($ingredients_lc, $_);
+								my (undef, $cleaned, undef, $is_recognized)
+									= parse_processing_from_ingredient($ingredients_lc, $candidate);
 
-								$ingredients_recognized += $is_recognized;
+								$is_recognized_side[$side] = $is_recognized ? 1 : 0;
+								$cleaned_side[$side] = $cleaned;
+
+								$ingredients_recognized += $is_recognized_side[$side];
 							}
+
+							# Shared-head coordination (issue #14853):
+							# in "sheep's and goat's milk", the head noun "milk" is present only on the
+							# recognized side. Reconstruct it on the unknown side (e.g. "sheep's" ->
+							# "sheep's milk") so that we do not keep a truncated ingredient.
+							# Done only when exactly one side is recognized: when both sides are known
+							# there is nothing to reconstruct, and the guard that protects processing
+							# phrases like "cut and fried potatoes" is left untouched.
+							if ($ingredients_recognized == 1) {
+
+								my ($unknown_side, $known_side)
+									= $is_recognized_side[0] ? (1, 0) : (0, 1);
+
+								my $completed_ref = try_completing_shared_head_ingredient(
+									$ingredients_lc,
+									$cleaned_side[$unknown_side],
+									$cleaned_side[$known_side]
+								);
+
+								if (defined $completed_ref) {
+
+									$debug_ingredients
+										and $log->debug(
+										"parse_ingredient_text - shared head coordination: completing ingredient",
+										{
+											ingredient => ($unknown_side == 0) ? $ingredient1_orig : $ingredient2_orig,
+											completed_with => $completed_ref->{text},
+											id => $completed_ref->{id},
+										}
+										) if $log->is_debug();
+
+									if ($unknown_side == 0) {
+										$ingredient1_orig = $completed_ref->{text};
+									}
+									else {
+										$ingredient2_orig = $completed_ref->{text};
+									}
+
+									# NOTE: the processing words are kept on the completed ingredient text, so the
+									# normal processing extraction below picks them up; do not push them here.
+								}
+							}
+
 							# Did we recognize one of the two ingredients?
 							if ($ingredients_recognized >= 1) {
 								$debug_ingredients
